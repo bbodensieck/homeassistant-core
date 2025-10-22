@@ -274,3 +274,95 @@ async def test_browse_resolve_without_setup() -> None:
 
     with pytest.raises(media_source.Unresolvable):
         await media_source.async_resolve_media(Mock(data={}), None, None)
+
+
+async def test_websocket_get_all_files(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+) -> None:
+    """Test get_all_files websocket command."""
+    assert await async_setup_component(hass, media_source.DOMAIN, {})
+    await hass.async_block_till_done()
+
+    client = await hass_ws_client(hass)
+
+    # Create mock media with children (files and folders)
+    file1 = media_source.models.BrowseMediaSource(
+        domain=media_source.DOMAIN,
+        identifier="local/test.mp3",
+        title="test.mp3",
+        media_class=MediaClass.MUSIC,
+        media_content_type="audio/mpeg",
+        can_play=True,
+        can_expand=False,
+    )
+    file2 = media_source.models.BrowseMediaSource(
+        domain=media_source.DOMAIN,
+        identifier="local/test2.mp3",
+        title="test2.mp3",
+        media_class=MediaClass.MUSIC,
+        media_content_type="audio/mpeg",
+        can_play=True,
+        can_expand=False,
+    )
+    folder = media_source.models.BrowseMediaSource(
+        domain=media_source.DOMAIN,
+        identifier="local/subfolder",
+        title="subfolder",
+        media_class=MediaClass.DIRECTORY,
+        media_content_type="",
+        can_play=False,
+        can_expand=True,
+    )
+    
+    media = media_source.models.BrowseMediaSource(
+        domain=media_source.DOMAIN,
+        identifier="local",
+        title="Local Media",
+        media_class=MediaClass.DIRECTORY,
+        media_content_type="listing",
+        can_play=False,
+        can_expand=True,
+        children=[file1, file2, folder],
+    )
+
+    with patch(
+        "homeassistant.components.media_source.async_browse_media",
+        return_value=media,
+    ):
+        await client.send_json(
+            {
+                "id": 1,
+                "type": "media_source/get_all_files",
+                "media_content_id": f"{const.URI_SCHEME}{media_source.DOMAIN}/local",
+            }
+        )
+
+        msg = await client.receive_json()
+
+    assert msg["success"]
+    assert msg["id"] == 1
+    assert msg["result"]["count"] == 2
+    assert len(msg["result"]["files"]) == 2
+    assert msg["result"]["files"][0]["title"] == "test.mp3"
+    assert msg["result"]["files"][1]["title"] == "test2.mp3"
+    # Ensure folder is not included
+    assert not any(f["title"] == "subfolder" for f in msg["result"]["files"])
+
+    # Test error handling
+    with patch(
+        "homeassistant.components.media_source.async_browse_media",
+        side_effect=BrowseError("test error"),
+    ):
+        await client.send_json(
+            {
+                "id": 2,
+                "type": "media_source/get_all_files",
+                "media_content_id": "invalid",
+            }
+        )
+
+        msg = await client.receive_json()
+
+    assert not msg["success"]
+    assert msg["error"]["code"] == "browse_media_failed"
+    assert msg["error"]["message"] == "test error"

@@ -75,6 +75,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.data[DOMAIN] = {}
     websocket_api.async_register_command(hass, websocket_browse_media)
     websocket_api.async_register_command(hass, websocket_resolve_media)
+    websocket_api.async_register_command(hass, websocket_get_all_files)
     frontend.async_register_built_in_panel(
         hass, "media-browser", "media_browser", "hass:play-box-multiple"
     )
@@ -205,5 +206,45 @@ async def websocket_resolve_media(
                 hass, media.url, allow_relative_url=True
             ),
             "mime_type": media.mime_type,
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "media_source/get_all_files",
+        vol.Required(ATTR_MEDIA_CONTENT_ID): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_get_all_files(
+    hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Get all files in a media folder."""
+    try:
+        media = await async_browse_media(hass, msg["media_content_id"])
+    except BrowseError as err:
+        connection.send_error(msg["id"], "browse_media_failed", str(err))
+        return
+
+    # Collect all playable media items (files)
+    files = []
+    if media.children:
+        for child in media.children:
+            if child.can_play:
+                files.append(
+                    {
+                        "media_content_id": child.media_content_id,
+                        "title": child.title,
+                        "media_content_type": child.media_content_type,
+                        "media_class": child.media_class,
+                    }
+                )
+
+    connection.send_result(
+        msg["id"],
+        {
+            "files": files,
+            "count": len(files),
         },
     )
